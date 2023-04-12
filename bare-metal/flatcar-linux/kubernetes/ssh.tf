@@ -38,6 +38,8 @@ resource "null_resource" "copy-controller-secrets" {
 
   provisioner "remote-exec" {
     inline = [
+      var.enable_live ?
+      "sudo mv /home/core/kubeconfig /persist/kubernetes/kubeconfig" :
       "sudo mv /home/core/kubeconfig /etc/kubernetes/kubeconfig",
       "sudo /opt/bootstrap/layout",
     ]

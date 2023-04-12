@@ -8,6 +8,8 @@ locals {
   ]
   args = [
     "initrd=flatcar_production_pxe_image.cpio.gz",
+    var.enable_live ?
+    "flatcar.config.url=${var.matchbox_http_endpoint}/ignition?uuid=$${uuid}&mac=$${mac:hexhyp}&os=installed" :
     "flatcar.config.url=${var.matchbox_http_endpoint}/ignition?uuid=$${uuid}&mac=$${mac:hexhyp}",
     "flatcar.first_boot=yes",
   ]
@@ -55,6 +57,7 @@ data "ct_config" "install" {
     mac                = concat(var.controllers.*.mac, var.workers.*.mac)[count.index]
     install_disk       = var.install_disk
     ssh_authorized_key = var.ssh_authorized_key
+    live               = var.enable_live
     # only cached profile adds -b baseurl
     baseurl_flag = var.cached_install ? "-b ${var.matchbox_http_endpoint}/assets/flatcar" : ""
   })
@@ -82,13 +85,17 @@ resource "matchbox_profile" "controllers" {
 # Flatcar Linux controllers
 data "ct_config" "controllers" {
   count = length(var.controllers)
-  content = templatefile("${path.module}/butane/controller.yaml", {
+  content = templatefile("${path.module}/butane/controller.tftpl", {
     domain_name            = var.controllers.*.domain[count.index]
     etcd_name              = var.controllers.*.name[count.index]
     etcd_initial_cluster   = join(",", formatlist("%s=https://%s:2380", var.controllers.*.name, var.controllers.*.domain))
     cluster_dns_service_ip = module.bootstrap.cluster_dns_service_ip
     cluster_domain_suffix  = var.cluster_domain_suffix
     ssh_authorized_key     = var.ssh_authorized_key
+    live                   = var.enable_live
+    live_disk              = var.live_disk
+    # the etc variable determines if we use the persistent partition or the /etc/ folder for all the files that will be mounted 
+    etc = var.enable_live ? "persist" : "etc"
   })
   strict   = true
   snippets = lookup(var.snippets, var.controllers.*.name[count.index], [])

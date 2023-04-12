@@ -1,0 +1,245 @@
+variant: flatcar
+version: 1.0.0
+systemd:
+  units:
+    - name: docker.service
+      enabled: true
+    - name: locksmithd.service
+      mask: true
+    - name: kubelet.path
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Watch for kubeconfig
+        [Path]
+        PathExists=/${etc}/kubernetes/kubeconfig
+        [Install]
+        WantedBy=multi-user.target
+    - name: wait-for-dns.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Wait for DNS entries
+        Wants=systemd-resolved.service
+        Before=kubelet.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=true
+        ExecStart=/bin/sh -c 'while ! /usr/bin/grep '^[^#[:space:]]' /etc/resolv.conf > /dev/null; do sleep 1; done'
+        [Install]
+        RequiredBy=kubelet.service
+    - name: kubelet.service
+      contents: |
+        [Unit]
+        Description=Kubelet
+        Requires=docker.service
+        After=docker.service
+        Wants=rpc-statd.service
+        [Service]
+        Environment=KUBELET_IMAGE=quay.io/poseidon/kubelet:v1.26.3
+        ExecStartPre=/bin/mkdir -p /etc/cni/net.d
+        ExecStartPre=/bin/mkdir -p /${etc}/kubernetes/manifests
+        ExecStartPre=/bin/mkdir -p /opt/cni/bin
+        ExecStartPre=/bin/mkdir -p /var/lib/calico
+        ExecStartPre=/bin/mkdir -p /var/lib/kubelet/volumeplugins
+        ExecStartPre=/usr/bin/bash -c "grep 'certificate-authority-data' /${etc}/kubernetes/kubeconfig | awk '{print $2}' | base64 -d > /${etc}/kubernetes/ca.crt"
+        # Podman, rkt, or runc run container processes, whereas docker run
+        # is a client to a daemon and requires workarounds to use within a
+        # systemd unit. https://github.com/moby/moby/issues/6791
+        ExecStartPre=/usr/bin/docker run -d \
+          --name kubelet \
+          --privileged \
+          --pid host \
+          --network host \
+          -v /etc/cni/net.d:/etc/cni/net.d:ro \
+          -v /${etc}/kubernetes:/etc/kubernetes:ro \
+          -v /etc/machine-id:/etc/machine-id:ro \
+          -v /usr/lib/os-release:/etc/os-release:ro \
+          -v /lib/modules:/lib/modules:ro \
+          -v /run:/run \
+          -v /sys/fs/cgroup:/sys/fs/cgroup \
+          -v /var/lib/calico:/var/lib/calico:ro \
+          -v /var/lib/containerd:/var/lib/containerd \
+          -v /var/lib/kubelet:/var/lib/kubelet:rshared \
+          -v /var/log:/var/log \
+          -v /opt/cni/bin:/opt/cni/bin \
+          $${KUBELET_IMAGE} \
+          --bootstrap-kubeconfig=/${etc}/kubernetes/kubeconfig \
+          --config=/${etc}/kubernetes/kubelet.yaml \
+          --container-runtime-endpoint=unix:///run/containerd/containerd.sock \
+          --hostname-override=${domain_name} \
+          --kubeconfig=/var/lib/kubelet/kubeconfig \
+          --node-labels=node.kubernetes.io/node \
+          %{~ for label in compact(split(",", node_labels)) ~}
+          --node-labels=${label} \
+          %{~ endfor ~}
+          %{~ for taint in compact(split(",", node_taints)) ~}
+          --register-with-taints=${taint} \
+          %{~ endfor ~}
+          --node-labels=node.kubernetes.io/node
+        ExecStart=docker logs -f kubelet
+        ExecStop=docker stop kubelet
+        ExecStopPost=docker rm kubelet
+        Restart=always
+        RestartSec=5
+        [Install]
+        WantedBy=multi-user.target
+    %{~ if live }
+    - name: update-engine.service
+      mask: true
+    - name: data-mount.mount
+      enabled: true
+      contents:
+        inline: |
+          [Unit]
+          Description= Mounting persistent data
+          Before=sshd.service kubelet.service
+          After=mounter.service
+          [Mount]
+          What=/dev/disk/by-partlabel/persister
+          Where=/persist
+          Type=ext4
+          Options=defaults
+          [Install]
+          WantedBy=multi-user.target
+    - name: mounter.service
+      enabled: true
+      contents:
+        inline: |
+          [Unit]
+          Description= The service used to prepare the disk by mounting it or creating the required partition if it doesn't exist
+          Before=sshd.service kubelet.service
+          [Service]
+          Type= oneshot
+          ExecStartPre=/bin/mkdir -p /persist
+          ExecStart=/opt/disk_preparation
+          RemainAfterExit= false
+          [Install]
+          WantedBy=multi-user.target
+    - name: linker.service
+      enabled: true
+      contents:
+        inline: |
+          [Unit]
+          Description= The service used to prepare the SSH host keys
+          After=mounter.service data-mount.mount
+          Wants=mounter.service data-mount.mount
+          Before=sshd.service kubelet.service
+          [Service]
+          Type= oneshot
+          ExecStart=/opt/ssh_host_key_verification
+          RemainAfterExit= false
+          [Install]
+          WantedBy=multi-user.target
+    %{~ endif }
+storage:
+  directories:
+    - path: /${etc}/kubernetes
+      mode: 0755
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline:
+          ${domain_name}
+    - path: /${etc}/kubernetes/kubelet.yaml
+      mode: 0644
+      contents:
+        inline: |
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          authentication:
+            anonymous:
+              enabled: false
+            webhook:
+              enabled: true
+            x509:
+              clientCAFile: /${etc}/kubernetes/ca.crt
+          authorization:
+            mode: Webhook
+          cgroupDriver: systemd
+          clusterDNS:
+            - ${cluster_dns_service_ip}
+          clusterDomain: ${cluster_domain_suffix}
+          healthzPort: 0
+          rotateCertificates: true
+          shutdownGracePeriod: 45s
+          shutdownGracePeriodCriticalPods: 30s
+          staticPodPath: /${etc}/kubernetes/manifests
+          readOnlyPort: 0
+          resolvConf: /run/systemd/resolve/resolv.conf
+          volumePluginDir: /var/lib/kubelet/volumeplugins
+    - path: /etc/systemd/logind.conf.d/inhibitors.conf
+      contents:
+        inline: |
+          [Login]
+          InhibitDelayMaxSec=45s
+    - path: /etc/sysctl.d/max-user-watches.conf
+      mode: 0644
+      contents:
+        inline: |
+          fs.inotify.max_user_watches=16184
+    %{~ if live }
+    - path: /opt/disk_preparation
+      contents:
+        inline: |
+          #!/bin/sh -eu
+          %{~ if live_disk != "" }
+          disk=$$(realpath ${live_disk})
+          %{~ else }
+          disk=$$(for device in /sys/block/*; do
+            if readlink "$$device" | grep -q virtual; then
+              continue # Skip virtual devices
+            fi
+            echo -en "/dev$${device#/sys/block*}\t"
+            udevadm info -a -p "$$device" | awk -F '"' '/ATTR{size}/ { print $2 }'
+          done | sort -nk 2n | cut -f1 | head -1)
+          %{~ endif }          
+          # we try to mount the partition labeled persister and if we can't mount it, then we have to create it
+          mkdir -p /persist
+          if [ ! -f /dev/disk/by-partlabel/persister ] ; 
+            then
+              sed -e 's/\s*\([\+0-9a-zA-Z]*\).*/\1/' << EOF | fdisk $(disk) ;
+                n # new partition
+                p # primary partition
+                1 # partition number 1
+                  # default - start at beginning of disk 
+                +100M # 100 MB parttion
+                q # and we're done
+              EOF
+              mkfs.ext4 -c $(disk)1 ;
+              e2label $(disk)1 "persister";
+            fi
+          mkdir -p /persist/sshd-config
+    - path: /opt/ssh_host_key_verification
+      contents:
+        inline: |
+          #!/bin/sh -eu
+          if [ ! -f /persist/ssh/ssh_host_rsa_key ] ;
+          then
+            mkdir -p /persist/sshd-config ;
+            ssh-keygen -q -t rsa -f /persist/sshd-config/ssh_host_rsa_key -C "root@localhost" -N "" ;
+            ssh-keygen -q -t dsa -f /persist/sshd-config/ssh_host_dsa_key -C "root@localhost" -N "" ;
+            ssh-keygen -q -t ecdsa -f /persist/sshd-config/ssh_host_ecdsa_key -C "root@localhost" -N "" ;
+            ssh-keygen -q -t ed25519 -f /persist/sshd-config/ssh_host_ed25519_key -C "root@localhost" -N "" ;
+            chmod 600  -R /persist/sshd-config
+            chmod 644 /persist/sshd-config/ssh_host_rsa_key.pub
+            chmod 644 /persist/sshd-config/ssh_host_dsa_key.pub
+            chmod 644 /persist/sshd-config/ssh_host_ecdsa_key.pub
+            chmod 644 /persist/sshd-config/ssh_host_ed25519_key.pub
+          fi
+    - path: /etc/ssh/sshd_config.d/host_key_config.conf
+      contents:
+        inline: |
+          #	$OpenBSD: sshd_config,v 1.103 2018/04/09 20:41:22 tj Exp $
+          HostKey /persist/sshd-config/ssh_host_rsa_key
+          HostKey /persist/sshd-config/ssh_host_dsa_key
+          HostKey /persist/sshd-config/ssh_host_ecdsa_key
+          HostKey /persist/sshd-config/ssh_host_ed25519_key
+    %{~ endif }
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ${ssh_authorized_key}
+
