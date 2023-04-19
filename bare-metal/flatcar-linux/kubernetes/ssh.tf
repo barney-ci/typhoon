@@ -62,9 +62,9 @@ resource "null_resource" "bootstrap" {
     timeout = "15m"
   }
 
-  provisioner "remote-exec" {
-    inline = [
-      "sudo systemctl start bootstrap",
-    ]
-  }
+  # provisioner "remote-exec" {
+  #   inline = [
+  #     "sudo systemctl start bootstrap",
+  #   ]
+  # }
 }

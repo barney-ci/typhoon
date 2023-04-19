@@ -103,27 +103,27 @@ systemd:
         RestartSec=10
         [Install]
         WantedBy=multi-user.target
-    - name: bootstrap.service
-      contents: |
-        [Unit]
-        Description=Kubernetes control plane
-        Wants=docker.service
-        After=docker.service
-        ConditionPathExists=!/%{if !live}opt%{else}persist%{endif}/bootstrap/bootstrap.done
-        [Service]
-        Type=oneshot
-        RemainAfterExit=true
-        WorkingDirectory=/opt/bootstrap
-        Environment=KUBELET_IMAGE=quay.io/poseidon/kubelet:v1.26.3
-        ExecStart=/usr/bin/docker run \
-            -v /${etc}/kubernetes/pki:/etc/kubernetes/pki:ro \
-            -v /%{if !live}opt%{else}persist%{endif}/bootstrap/assets:/assets:ro \
-            -v /opt/bootstrap/apply:/apply:ro \
-            --entrypoint=/apply \
-            $${KUBELET_IMAGE}
-        ExecStartPost=/bin/touch /%{if !live}opt%{else}persist%{endif}/bootstrap/bootstrap.done
-        [Install]
-        WantedBy=multi-user.target
+#    - name: bootstrap.service
+#      contents: |
+#        [Unit]
+#        Description=Kubernetes control plane
+#        Wants=docker.service
+#        After=docker.service
+#        ConditionPathExists=!/%{if !live}opt%{else}persist%{endif}/bootstrap/bootstrap.done
+#        [Service]
+#        Type=oneshot
+#        RemainAfterExit=true
+#        WorkingDirectory=/opt/bootstrap
+#        Environment=KUBELET_IMAGE=quay.io/poseidon/kubelet:v1.26.3
+#        ExecStart=/usr/bin/docker run \
+#            -v /${etc}/kubernetes/pki:/etc/kubernetes/pki:ro \
+#            -v /%{if !live}opt%{else}persist%{endif}/bootstrap/assets:/assets:ro \
+#            -v /opt/bootstrap/apply:/apply:ro \
+#            --entrypoint=/apply \
+#            $${KUBELET_IMAGE}
+#        ExecStartPost=/bin/touch /%{if !live}opt%{else}persist%{endif}/bootstrap/bootstrap.done
+#        [Install]
+#        WantedBy=multi-user.target
     %{~ if live }
     - name: update-engine.service
       mask: true
