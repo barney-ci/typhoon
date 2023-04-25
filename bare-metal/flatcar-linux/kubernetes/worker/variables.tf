@@ -98,6 +98,18 @@ variable "kernel_args" {
   default     = []
 }
 
+variable "enable_live" {
+  type        = bool
+  description = "Enable live booting and one partition's persistence for Typhoon"
+  default     = false
+}
+
+variable "live_disk" {
+  type        = string
+  default     = ""
+  description = "Disk device used for persistence with live boot enabled. It is only useful to set this variable if enable_live is also enabled"
+}
+
 # unofficial, undocumented, unsupported
 
 variable "service_cidr" {

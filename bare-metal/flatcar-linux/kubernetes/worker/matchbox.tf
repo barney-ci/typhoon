@@ -8,6 +8,8 @@ locals {
   ]
   args = flatten([
     "initrd=flatcar_production_pxe_image.cpio.gz",
+    var.enable_live ?
+    "flatcar.config.url=${var.matchbox_http_endpoint}/ignition?uuid=$${uuid}&mac=$${mac:hexhyp}&os=installed" :
     "flatcar.config.url=${var.matchbox_http_endpoint}/ignition?uuid=$${uuid}&mac=$${mac:hexhyp}",
     "flatcar.first_boot=yes",
     var.kernel_args,
@@ -50,6 +52,7 @@ data "ct_config" "install" {
     mac                = var.mac
     install_disk       = var.install_disk
     ssh_authorized_key = var.ssh_authorized_key
+    live               = var.enable_live
     # only cached profile adds -b baseurl
     baseurl_flag = var.cached_install ? "-b ${var.matchbox_http_endpoint}/assets/flatcar" : ""
   })
@@ -74,13 +77,17 @@ resource "matchbox_profile" "worker" {
 
 # Flatcar Linux workers
 data "ct_config" "worker" {
-  content = templatefile("${path.module}/butane/worker.yaml", {
+  content = templatefile("${path.module}/butane/worker.tftpl", {
     domain_name            = var.domain
     ssh_authorized_key     = var.ssh_authorized_key
     cluster_dns_service_ip = cidrhost(var.service_cidr, 10)
     cluster_domain_suffix  = var.cluster_domain_suffix
     node_labels            = join(",", var.node_labels)
     node_taints            = join(",", var.node_taints)
+    live                   = var.enable_live
+    live_disk              = var.live_disk
+    # the etc variable determines if we use the persistent partition or the /etc/ folder for all the files that will be mounted 
+    etc = var.enable_live ? "persist" : "etc"
   })
   strict   = true
   snippets = var.snippets
